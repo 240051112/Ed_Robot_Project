@@ -1,0 +1,65 @@
+# ROS 2 build artifacts
+build/
+install/
+log/
+
+# General Python
+*.pyc
+__pycache__/
+*.egg-info/
+*.env
+
+# Logs and Databases
+Log/
+*.log
+*.log.*
+.rag_index/
+*chroma_db/
+ROS_Log/
+*.mkv
+*.db
+*.sqlite3
+
+# Models (These are too big for Git)
+*.gguf
+*.onnx
+*.pth
+*.pt
+*.bin
+*.engine
+*.pb
+*.dat
+models/
+phi3_models/
+voice_models/
+
+# Large Files & Backups
+*.bak
+*.tgz
+*.tar.gz
+*.zip
+*.whl
+*BACKUP/
+*_BACKUP/
+
+# CAD / Meshes
+*.stl
+*.STL
+
+# Test Results, Documents, & Images
+# We want to ignore these data files
+*.pdf
+*.jpg
+*.png
+*.csv
+*.json
+*.xlsx
+*.txt
+ai_ed_ws/src/ed_tests/result/
+ai_ed_ws/src/ed_tests/runs/
+ai_ed_ws/src/ed_core/documents/
+
+# Re-include specific text files we DO want
+!ai_ed_ws/src/ed_core/ed_core/rag_service/system_prompt.md
+!ai_ed_ws/src/ed_tests/questions_25.txt
+!ai_ed_ws/requirements-lock.txt

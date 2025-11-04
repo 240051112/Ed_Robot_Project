@@ -1,0 +1,40 @@
+#!/usr/bin/env python3
+import rclpy
+from rclpy.node import Node
+from dofbot_pro_interface.msg import ArmJoint
+import time
+
+class GoHomeSkillNode(Node):
+    def __init__(self):
+        super().__init__('go_home_skill_node')
+        self.publisher_ = self.create_publisher(ArmJoint, '/TargetAngle', 10)
+        self.get_logger().info("Executing 'Go Home' skill...")
+        self.go_home()
+
+    def go_home(self):
+        # Define the joint angles for the "home" position (all vertical)
+        # [Base, Shoulder, Elbow, Wrist Vertical, Wrist Rotation, Gripper]
+        home_angles = [90.0, 90.0, 90.0, 90.0, 90.0, 90.0]
+
+        # Send each joint command one by one
+        for i, angle in enumerate(home_angles):
+            msg = ArmJoint()
+            msg.id = i + 1  # Joint IDs are 1-6
+            msg.angle = float(angle)
+            msg.run_time = 1500  # Time in milliseconds
+            self.publisher_.publish(msg)
+            self.get_logger().info(f"Commanding Joint {msg.id} to {msg.angle} degrees.")
+            time.sleep(0.1) # Small delay between commands
+
+        self.get_logger().info("'Go Home' skill complete. Shutting down.")
+        # Give a moment for the last message to be sent before shutting down
+        time.sleep(1)
+        rclpy.shutdown()
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = GoHomeSkillNode()
+    # No need to spin, the node does its work and shuts down
+
+if __name__ == '__main__':
+    main()

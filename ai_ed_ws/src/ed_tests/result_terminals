@@ -1,0 +1,166 @@
+Terminal 1
+
+
+
+
+========================================================
+🤖 Welcome to the Ed Robotic AI Development Environment by AGBOR EDOUARD🤖
+========================================================
+Key commands:
+  - build_ed
+  - run_ed_brain, run_ed_voice, ed_go_home  etc.
+========================================================
+
+jetson@yahboom:~$ setup_ed
+cd ~/ai_ed_ws
+colcon build --packages-select ed_core
+source ~/ai_ed_ws/install/setup.bash
+run_ed_brain
+🚀 Activating Ed Environment...
+✅ Ed Environment is ready.
+WARNING: Package name "dofbot_pro_KCF" does not follow the naming conventions. It should start with a lower case letter and only contain lower case letters, digits, underscores, and dashes.
+Starting >>> ed_core 
+Finished <<< ed_core [3.79s]          
+
+Summary: 1 package finished [4.16s]
+🚀 Activating Ed Environment...
+✅ Ed Environment is ready.
+INFO:     Started server process [861103]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+INFO:     127.0.0.1:50932 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50946 - "POST /query HTTP/1.1" 200 OK
+INFO:     127.0.0.1:33008 - "POST /query HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57840 - "POST /query HTTP/1.1" 200 OK
+INFO:     127.0.0.1:34050 - "POST /query HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57142 - "POST /query HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57772 - "POST /query HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54976 - "POST /query HTTP/1.1" 200 OK
+INFO:     127.0.0.1:47786 - "POST /query HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60442 - "POST /query HTTP/1.1" 200 OK
+INFO:     127.0.0.1:34464 - "POST /query HTTP/1.1" 200 OK
+INFO:     127.0.0.1:33520 - "POST /query HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52240 - "POST /query HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59426 - "POST /query HTTP/1.1" 200 OK
+INFO:     127.0.0.1:36478 - "POST /query HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50912 - "POST /query HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51394 - "POST /query HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51294 - "POST /query HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50170 - "POST /query HTTP/1.1" 200 OK
+INFO:     127.0.0.1:42978 - "POST /query HTTP/1.1" 200 OK
+INFO:     127.0.0.1:43834 - "POST /query HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56126 - "POST /query HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51274 - "POST /query HTTP/1.1" 200 OK
+INFO:     127.0.0.1:33404 - "POST /query HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53438 - "POST /query HTTP/1.1" 200 OK
+INFO:     127.0.0.1:36764 - "POST /query HTTP/1.1" 200 OK
+
+
+
+
+Terminal 2
+
+
+
+========================================================
+🤖 Welcome to the Ed Robotic AI Development Environment by AGBOR EDOUARD🤖
+========================================================
+Key commands:
+  - build_ed
+  - run_ed_brain, run_ed_voice, ed_go_home  etc.
+========================================================
+
+jetson@yahboom:~$ tegrastats --interval 50 > /tmp/t.log & pid=$!; sleep 1; kill $pid
+python3 - <<'PY'
+import re,sys
+d=open("/tmp/t.log").read()
+print("GPU hits:", len(re.findall(r'GR3D_FREQ\\s+\\d+\\.?\\d*%', d)))
+print("CPU hits:", len(re.findall(r'CPU\\s*\\[[^\\]]+\\]', d)))
+print("temps cpu/gpu/tj:", re.findall(r'cpu@([\\d.]+)C', d)[:3],
+      re.findall(r'gpu@([\\d.]+)C', d)[:3],
+      re.findall(r'tj@([\\d.]+)C', d)[:3])
+print("rails IN/CG/SOC:",
+      bool(re.search(r'(VDD_IN|POM_5V_IN)', d)),
+      bool(re.search(r'VDD_CPU_GPU_CV', d)),
+      bool(re.search(r'VDD_SOC', d)))
+PY
+[1] 862358
+GPU hits: 0
+<stdin>:4: FutureWarning: Possible nested set at position 10
+CPU hits: 0
+temps cpu/gpu/tj: [] [] []
+rails IN/CG/SOC: True True True
+[1]+  Terminated              tegrastats --interval 50 > /tmp/t.log
+jetson@yahboom:~$ cd ~/ai_ed_ws/src/ed_tests
+
+# keep logs/JSONs & denser sampling (helps short calls)
+export KEEP_ENERGY_LOG=1
+export KEEP_RESPONSES=1
+export TEGRA_INTERVAL_MS=50
+export WARMUP_MS=400
+export COOLDOWN_MS=800
+
+chmod +x ./test_ed_25.sh
+./test_ed_25.sh http://localhost:8000 ./runs/single ./questions_25.txt
+
+# Peek while it runs:
+column -s, -t ./runs/single/summary.csv
+head -n 15 ./runs/single/results.csv | column -s, -t
+Out dir : ./runs/single
+Server  : http://localhost:8000
+Questions: 25
+Q01 rag_procedure/ ctx=6 / 9.037s / 20.17W→22.22W / GPU 87% pk 99% / CPU 12% pk 37% / Tcpu 55.2°C pk 56.6°C
+Q02 rag_procedure/ ctx=11 / 15.792s / 21.38W→23.91W / GPU 91% pk 101% / CPU 9% pk 28% / Tcpu 57.7°C pk 59.6°C
+Q03 rag_general/ ctx=6 / 16.570s / 21.78W→25.77W / GPU 92% pk 99% / CPU 12% pk 38% / Tcpu 60.3°C pk 62.6°C
+Q04 identity/ ctx=0 / 8.926s / 22.42W→27.86W / GPU 88% pk 99% / CPU 24% pk 98% / Tcpu 62.6°C pk 65.7°C
+Q05 rag_procedure/ ctx=6 / 16.754s / 21.57W→24.12W / GPU 91% pk 99% / CPU 15% pk 46% / Tcpu 63.5°C pk 65.0°C
+Q06 rag_general/ ctx=3 / 17.677s / 21.09W→23.82W / GPU 92% pk 99% / CPU 7% pk 26% / Tcpu 64.2°C pk 65.3°C
+Q07 rag_procedure/ ctx=4 / 14.381s / 21.83W→24.21W / GPU 91% pk 99% / CPU 7% pk 42% / Tcpu 65.1°C pk 65.9°C
+Q08 rag_general/ ctx=4 / 17.710s / 21.48W→24.57W / GPU 93% pk 99% / CPU 11% pk 35% / Tcpu 65.7°C pk 66.6°C
+Q09 rag_general/ ctx=6 / 15.611s / 22.65W→25.30W / GPU 91% pk 99% / CPU 10% pk 30% / Tcpu 66.4°C pk 67.6°C
+Q10 rag_procedure/ ctx=11 / 16.640s / 21.16W→24.30W / GPU 92% pk 99% / CPU 8% pk 71% / Tcpu 66.6°C pk 68.3°C
+Q11 rag_procedure/ ctx=14 / 15.511s / 21.86W→25.39W / GPU 92% pk 99% / CPU 12% pk 41% / Tcpu 67.0°C pk 68.8°C
+Q12 rag_general/ ctx=5 / 16.559s / 22.07W→25.55W / GPU 92% pk 99% / CPU 11% pk 45% / Tcpu 67.4°C pk 68.2°C
+Q13 rag_procedure/ ctx=11 / 15.970s / 21.64W→24.57W / GPU 91% pk 99% / CPU 9% pk 53% / Tcpu 67.5°C pk 68.6°C
+Q14 rag_procedure/ ctx=7 / 16.358s / 21.41W→24.64W / GPU 91% pk 99% / CPU 9% pk 30% / Tcpu 67.5°C pk 68.2°C
+Q15 rag_general/ ctx=6 / 15.003s / 22.81W→25.39W / GPU 91% pk 99% / CPU 9% pk 33% / Tcpu 67.8°C pk 68.8°C
+Q16 rag_general/ ctx=5 / 16.756s / 22.26W→25.44W / GPU 92% pk 99% / CPU 14% pk 84% / Tcpu 68.2°C pk 69.2°C
+Q17 rag_procedure/ ctx=5 / 16.532s / 21.34W→24.14W / GPU 92% pk 99% / CPU 12% pk 52% / Tcpu 68.1°C pk 69.2°C
+Q18 rag_general/ ctx=6 / 16.012s / 22.17W→25.30W / GPU 91% pk 99% / CPU 11% pk 35% / Tcpu 68.1°C pk 69.0°C
+Q19 rag_general/ ctx=3 / 16.877s / 21.92W→24.89W / GPU 92% pk 99% / CPU 12% pk 38% / Tcpu 68.1°C pk 69.4°C
+Q20 rag_procedure/ ctx=10 / 15.407s / 21.71W→24.66W / GPU 92% pk 99% / CPU 8% pk 25% / Tcpu 68.0°C pk 68.8°C
+Q21 rag_general/ ctx=0 / 14.079s / 22.61W→24.73W / GPU 91% pk 99% / CPU 5% pk 24% / Tcpu 68.2°C pk 68.9°C
+Q22 rag_general/ ctx=6 / 15.256s / 22.37W→25.19W / GPU 92% pk 99% / CPU 6% pk 30% / Tcpu 68.2°C pk 69.3°C
+Q23 pivot/ ctx=0 / 10.141s / 22.37W→24.82W / GPU 88% pk 99% / CPU 5% pk 18% / Tcpu 68.3°C pk 68.9°C
+Q24 rag_general/ ctx=6 / 16.027s / 21.80W→24.96W / GPU 92% pk 99% / CPU 7% pk 32% / Tcpu 68.3°C pk 69.0°C
+Q25 offdomain/ ctx=0 / 10.655s / 22.00W→25.05W / GPU 90% pk 99% / CPU 6% pk 30% / Tcpu 68.3°C pk 69.3°C
+
+Done. Outputs in: ./runs/single
+  Table : ./runs/single/results.csv
+  Raw   : ./runs/single/responses.ndjson
+  Summ  : ./runs/single/summary.csv
+  Report: ./runs/single/results.md
+metric                   value
+total_requests           25
+avg_latency_s            15.050
+avg_power_vdd_in_w       21.835
+avg_peak_power_vdd_in_w  24.832
+qid  question                                                       mode           topic    ctx_count  total_s  answer_len  sources_count  avg_vdd_in_w  peak_vdd_in_w  avg_cpu_gpu_cv_w  peak_cpu_gpu_cv_w  avg_vdd_soc_w  peak_vdd_soc_w  avg_gpu_pct  peak_gpu_pct  avg_cpu_pct  peak_cpu_pct  avg_temp_cpu_c  peak_temp_cpu_c  avg_temp_gpu_c  peak_temp_gpu_c  avg_temp_tj_c  peak_temp_tj_c  url_count  pii_count
+Q01  What does G54 do and how do I use it safely?                   rag_procedure  cnc      6          9.037    214         1              20.166        22.220         10.745            12.070             4.545          4.928           87.03        99.00         11.66        37.00         55.16           56.62            57.10           60.09            57.25          60.09           0          0
+Q02  Give me the lockout/tagout steps before servicing a press.     rag_procedure  loto     11         15.792   123         2              21.381        23.909         11.447            13.185             4.826          5.263           91.18        101.00        8.81         28.00         57.66           59.56            60.57           62.44            60.63          62.44           0          0
+Q03  Ultimaker S7 first layer keeps failing — what should I check?  rag_general    3dp      6          16.57    411         2              21.781        25.775         11.610            14.494             4.917          5.495           91.54        99.00         11.70        37.62         60.30           62.62            62.96           66.00            63.02          66.00           0          0
+Q04  Who built you and where do you run?                            identity       general  0          8.926    189         0              22.421        27.855         12.287            16.671             4.883          5.552           87.88        99.00         23.87        97.88         62.56           65.66            64.57           66.94            64.69          66.94           0          0
+Q05  How do I set G55 on a Haas mill?                               rag_procedure  cnc      6          16.754   225         2              21.572        24.125         11.690            13.680             4.765          5.174           91.16        99.00         15.34        46.50         63.49           65.00            65.69           68.03            65.76          68.03           0          0
+Q06  Difference between G54 and G92?                                rag_general    cnc      3          17.677   410         2              21.085        23.820         11.214            13.086             4.737          5.263           91.66        99.00         7.37         25.50         64.18           65.28            66.63           68.47            66.67          68.47           0          0
+Q07  How do I safely home the robot?                                rag_procedure  general  4          14.381   182         2              21.829        24.214         11.680            13.324             4.895          5.345           91.36        99.00         7.14         42.50         65.06           65.94            67.80           69.59            67.83          69.59           0          0
+Q08  Show a 5S audit quicklist.                                     rag_general    lean     4          17.71    531         2              21.479        24.570         11.455            13.423             4.807          5.430           93.24        99.00         10.88        35.00         65.70           66.62            68.00           69.72            68.04          69.72           0          0
+Q09  What is OEE and how is it calculated?                          rag_general    lean     6          15.611   379         2              22.647        25.298         12.208            14.093             5.034          5.503           91.33        99.00         10.42        30.25         66.43           67.56            69.17           70.78            69.20          70.78           0          0
+Q10  How to verify zero energy in LOTO?                             rag_procedure  loto     11         16.64    123         2              21.158        24.303         11.244            13.245             4.771          5.430           91.51        99.00         7.69         70.88         66.62           68.34            68.95           70.94            68.99          70.94           0          0
+Q11  How do I set Z-offset on Ultimaker S7?                         rag_procedure  3dp      14         15.511   119         2              21.856        25.387         11.683            14.093             4.908          5.515           91.59        99.00         11.67        41.38         67.05           68.75            69.34           71.28            69.38          71.28           0          0
+Q12  Bed adhesion tips for PLA?                                     rag_general    3dp      5          16.559   405         2              22.070        25.546         11.935            14.349             4.881          5.499           92.25        99.00         11.49        45.00         67.40           68.19            69.84           71.69            69.89          71.69           0          0
+Q13  LOTO: restoring to service checklist?                          rag_procedure  loto     11         15.97    123         2              21.645        24.570         11.625            13.689             4.806          5.430           91.26        99.00         9.41         52.62         67.47           68.62            69.82           71.69            69.86          71.69           0          0
+Q14  CNC startup after maintenance checklist?                       rag_procedure  cnc      7          16.358   214         2              21.407        24.641         11.481            13.413             4.773          5.426           91.26        99.00         9.15         30.38         67.48           68.25            69.72           71.75            69.76          71.75           0          0
+jetson@yahboom:~/ai_ed_ws/src/ed_tests$ 
+
+

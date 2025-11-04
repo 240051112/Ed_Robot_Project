@@ -1,0 +1,15 @@
+ed_perception_node:
+  ros__parameters:
+    model_path: /home/jetson/ultralytics/ultralytics/yolo11n.engine
+    confidence_threshold: 0.5
+    show_video: true
+    depth_scale: 0.001
+    depth_window: 5
+    target_classes: []           # empty = all classes
+    output_frame: ""             # e.g. "base_link" if you have TF
+    color_topic: /camera/color/image_raw
+    depth_topic: /camera/depth/image_raw
+    info_topic:  /camera/color/camera_info
+    pub_custom_topic: /ed/detections_3d_custom
+    pub_vision_topic: /ed/detections_3d
+    pub_overlay_topic: /ed/overlay/image

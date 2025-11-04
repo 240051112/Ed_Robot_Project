@@ -1,0 +1,513 @@
+#!/usr/bin/env python3
+import time
+from typing import Optional, Tuple
+
+import rclpy
+from rclpy.node import Node
+from rclpy.action import ActionServer
+from rcl_interfaces.msg import ParameterDescriptor, ParameterType
+
+from sensor_msgs.msg import JointState
+from dofbot_pro_interface.msg import ArmJoint, DofbotDetection3DArray
+from dofbot_pro_interface.action import SkillExecution
+
+
+def clamp(x, lo, hi):
+    return max(lo, min(hi, x))
+
+
+class SkillServer(Node):
+    def __init__(self):
+        super().__init__('ed_skill_server')
+
+        # -------------------- Parameters --------------------
+        # Poses
+        self.declare_parameter('home_angles', [0.0, 145.0, 30.0, 0.0, 90.0, 45.0])
+        self.declare_parameter('home_runtime_ms', 3000)
+
+        self.declare_parameter('observe_angles', [0.0, 140.0, 35.0, 0.0, 90.0, 45.0])
+        self.declare_parameter('observe_runtime_ms', 2000)
+
+        self.declare_parameter('table_drop_angles', [90.0, 120.0, 60.0, 0.0, 90.0, 180.0])
+        self.declare_parameter('table_drop_runtime_ms', 2500)
+
+        # Camera model / pan-only aiming
+        self.declare_parameter('image_width', 640)
+        self.declare_parameter('camera_hfov_deg', 69.0)
+        self.declare_parameter('invert_pan', False)
+
+        # Scan sweep
+        self.declare_parameter('scan_pan_min_deg', 15.0)
+        self.declare_parameter('scan_pan_max_deg', 165.0)
+        self.declare_parameter('scan_pan_step_deg', 15.0)
+        self.declare_parameter('scan_pan_runtime_ms', 1200)
+        self.declare_parameter('scan_pan_settle_s', 0.20)
+
+        # Simple pre-grasp dip
+        self.declare_parameter('pregrasp_j2', 120.0)
+        self.declare_parameter('pregrasp_j3', 60.0)
+        self.declare_parameter('pregrasp_runtime_ms', 2500)
+        self.declare_parameter('post_raise_to_home', True)
+
+        # Follow-me (J1 only)
+        self.declare_parameter('follow_class', 'person')
+        self.declare_parameter('follow_tol_px', 25)
+        self.declare_parameter('follow_step_deg', 6.0)
+        self.declare_parameter('follow_runtime_ms', 700)
+        self.declare_parameter('follow_max_s', 20.0)
+        self.declare_parameter('follow_center_bias_px', 0)
+
+        # Bottle handshake (NEW)
+        self.declare_parameter('bottle_center_px', 90)  # +/- px window to consider centered
+        self.declare_parameter('aim_step_deg', 14.0)    # J1 correction per step
+        self.declare_parameter('grasp_z_min', 0.15)     # meters
+        self.declare_parameter('grasp_z_max', 0.55)     # meters
+        self.declare_parameter('bottle_follow_pan', True)
+
+        # For quick sanity checks: list the skills we support
+        self.declare_parameter(
+            'available_skills',
+            ['go_home', 'pose_observe',
+             'open_gripper', 'close_gripper',
+             'aim_best', 'aim_class', 'aim_and_grasp_best',
+             'scan_scene', 'scan_pan',
+             'follow_me',
+             'pick_bottle', 'give_to_hand', 'pick_and_give',
+             'place_table',
+             'hold_bottle'  # <— the one you were missing
+            ],
+            ParameterDescriptor(type=ParameterType.PARAMETER_STRING_ARRAY)
+        )
+
+        # -------------------- Read params --------------------
+        self.home_angles = [float(v) for v in self.get_parameter('home_angles').value]
+        self.home_runtime_ms = int(self.get_parameter('home_runtime_ms').value)
+
+        self.observe_angles = [float(v) for v in self.get_parameter('observe_angles').value]
+        self.observe_runtime_ms = int(self.get_parameter('observe_runtime_ms').value)
+
+        self.table_drop_angles = [float(v) for v in self.get_parameter('table_drop_angles').value]
+        self.table_drop_runtime_ms = int(self.get_parameter('table_drop_runtime_ms').value)
+
+        self.image_width = int(self.get_parameter('image_width').value)
+        self.camera_hfov_deg = float(self.get_parameter('camera_hfov_deg').value)
+        self.invert_pan = bool(self.get_parameter('invert_pan').value)
+
+        self.scan_pan_min = float(self.get_parameter('scan_pan_min_deg').value)
+        self.scan_pan_max = float(self.get_parameter('scan_pan_max_deg').value)
+        self.scan_pan_step = float(self.get_parameter('scan_pan_step_deg').value)
+        self.scan_pan_runtime_ms = int(self.get_parameter('scan_pan_runtime_ms').value)
+        self.scan_pan_settle_s = float(self.get_parameter('scan_pan_settle_s').value)
+
+        self.pregrasp_j2 = float(self.get_parameter('pregrasp_j2').value)
+        self.pregrasp_j3 = float(self.get_parameter('pregrasp_j3').value)
+        self.pregrasp_runtime_ms = int(self.get_parameter('pregrasp_runtime_ms').value)
+        self.post_raise_to_home = bool(self.get_parameter('post_raise_to_home').value)
+
+        self.follow_class = str(self.get_parameter('follow_class').value).strip().lower()
+        self.follow_tol_px = int(self.get_parameter('follow_tol_px').value)
+        self.follow_step_deg = float(self.get_parameter('follow_step_deg').value)
+        self.follow_runtime_ms = int(self.get_parameter('follow_runtime_ms').value)
+        self.follow_max_s = float(self.get_parameter('follow_max_s').value)
+        self.follow_center_bias_px = int(self.get_parameter('follow_center_bias_px').value)
+
+        self.center_px = int(self.get_parameter('bottle_center_px').value)
+        self.aim_step_deg = float(self.get_parameter('aim_step_deg').value)
+        self.grasp_z_min = float(self.get_parameter('grasp_z_min').value)
+        self.grasp_z_max = float(self.get_parameter('grasp_z_max').value)
+        self.bottle_follow_pan = bool(self.get_parameter('bottle_follow_pan').value)
+
+        # -------------------- Pub/Sub --------------------
+        self.arm_pub = self.create_publisher(ArmJoint, '/TargetAngle', 10)
+
+        self.current_joints = [None] * 6
+        self.last_j1_cmd = None
+        self.create_subscription(JointState, '/ArmAngleUpdate', self._joint_state_cb, 10)
+
+        # Prefer stabilized detections (then fall back to raw)
+        self.last_dets_stable: Optional[DofbotDetection3DArray] = None
+        self.last_dets_stable_ns: Optional[int] = None
+        self.last_dets: Optional[DofbotDetection3DArray] = None
+        self.last_dets_ns: Optional[int] = None
+
+        self.create_subscription(DofbotDetection3DArray, '/ed/detections_3d_stable', self._dets_cb_stable, 10)
+        self.create_subscription(DofbotDetection3DArray, '/ed/detections_3d_custom',  self._dets_cb,        10)
+
+        # -------------------- Action server --------------------
+        self._action_server = ActionServer(self, SkillExecution, 'ed_skill_server', self.execute_callback)
+
+        # Startup log so you can confirm you’re on the right build
+        self.get_logger().info("Ed's Skill Server ready.")
+        self.get_logger().info(f"AVAILABLE SKILLS: {self.get_parameter('available_skills').value}")
+
+    # ==================== Callbacks ====================
+    def _joint_state_cb(self, msg: JointState):
+        name_to_idx = {n: i for i, n in enumerate(msg.name)}
+        for i in range(6):
+            key = f'joint{i+1}'
+            if key in name_to_idx and len(msg.position) > name_to_idx[key]:
+                self.current_joints[i] = float(msg.position[name_to_idx[key]])
+
+    def _dets_cb_stable(self, msg: DofbotDetection3DArray):
+        self.last_dets_stable = msg
+        self.last_dets_stable_ns = int(msg.header.stamp.sec) * 10**9 + int(msg.header.stamp.nanosec)
+
+    def _dets_cb(self, msg: DofbotDetection3DArray):
+        self.last_dets = msg
+        self.last_dets_ns = int(msg.header.stamp.sec) * 10**9 + int(msg.header.stamp.nanosec)
+
+    # ==================== Helpers ====================
+    def _fresh(self, ns_time: Optional[int], max_age_s: float) -> bool:
+        if ns_time is None:
+            return False
+        now_ns = int(self.get_clock().now().nanoseconds)
+        return (now_ns - ns_time) <= int(max_age_s * 1e9)
+
+    def _get_dets(self, max_age_s=1.0) -> Optional[DofbotDetection3DArray]:
+        if self._fresh(self.last_dets_stable_ns, max_age_s) and self.last_dets_stable and self.last_dets_stable.detections:
+            return self.last_dets_stable
+        if self._fresh(self.last_dets_ns, max_age_s) and self.last_dets and self.last_dets.detections:
+            return self.last_dets
+        return None
+
+    def _wait_for_dets(self, timeout_sec=2.0, freshness_sec=1.0) -> bool:
+        t0 = time.time()
+        while time.time() - t0 < timeout_sec:
+            if self._get_dets(max_age_s=freshness_sec) is not None:
+                return True
+            time.sleep(0.05)
+        return False
+
+    def _best_det(self, class_name: Optional[str] = None):
+        arr = self._get_dets(max_age_s=1.0)
+        if not arr:
+            return None, None, None
+        best = None
+        for d in arr.detections:
+            nm = getattr(d, 'class_name', '').lower()
+            sc = float(getattr(d, 'score', 0.0))
+            if (class_name is None) or (nm == class_name.lower()):
+                if (best is None) or (sc > best[2]):
+                    best = (d, nm, sc)
+        return best if best else (None, None, None)
+
+    def _publish_single_joint(self, jid: int, angle_deg: float, runtime_ms: int, settle_s: float = 0.10):
+        msg = ArmJoint()
+        msg.id = int(jid)
+        msg.angle = float(angle_deg)
+        msg.run_time = int(runtime_ms)
+        self.arm_pub.publish(msg)
+        if jid == 1:
+            self.last_j1_cmd = float(angle_deg)
+        time.sleep(settle_s)
+
+    def _publish_joint_array(self, angles, runtime_ms: int, settle_s: float = 0.10):
+        for i, a in enumerate(angles, start=1):
+            self._publish_single_joint(i, float(a), runtime_ms, settle_s)
+
+    def _get_current_j1(self, fallback=90.0) -> float:
+        if self.current_joints[0] is not None:
+            return float(self.current_joints[0])
+        if self.last_j1_cmd is not None:
+            return float(self.last_j1_cmd)
+        return float(fallback)
+
+    def _aim_on_detection(self, target_name=None, max_steps=10, px_tolerance=8):
+        if not self._wait_for_dets(timeout_sec=2.0, freshness_sec=1.0):
+            return False, "No detections to aim at"
+        det, nm, sc = self._best_det(class_name=target_name)
+        if det is None:
+            return False, "No matching detections"
+
+        for _ in range(max_steps):
+            u = float(det.bbox.center.position.x)
+            center_u = self.image_width / 2.0
+            err_px = u - center_u
+            if abs(err_px) <= px_tolerance:
+                return True, f"Aimed {nm or 'object'} (err≈{err_px:.1f}px)"
+
+            deg_err = (err_px / self.image_width) * self.camera_hfov_deg
+            if self.invert_pan:
+                deg_err = -deg_err
+
+            j1 = self._get_current_j1(fallback=self.home_angles[0])
+            target = clamp(j1 + clamp(deg_err, -12.0, 12.0), 0.0, 180.0)
+            self._publish_single_joint(1, target, runtime_ms=1000, settle_s=0.15)
+
+            if not self._wait_for_dets(timeout_sec=1.0, freshness_sec=0.8):
+                return False, "Lost detections while aiming"
+            det, nm, sc = self._best_det(class_name=target_name)
+            if det is None:
+                return False, "Target not in view anymore"
+
+        return False, "Max aim steps reached"
+
+    # ---------- NEW: bottle “hold” loop ----------
+    def _hold_bottle_loop(self, timeout_s=20.0) -> Tuple[bool, str]:
+        # Open gripper first
+        self._publish_single_joint(6, 45.0, runtime_ms=600, settle_s=0.15)
+
+        t0 = time.time()
+        while time.time() - t0 < timeout_s:
+            det, nm, sc = self._best_det('bottle')
+            if det is None:
+                time.sleep(0.05)
+                continue
+
+            # center error (pixels)
+            u = float(det.bbox.center.position.x)
+            err_px = u - (self.image_width / 2.0)
+            centered = abs(err_px) <= self.center_px
+
+            # depth gate
+            z = float(det.position.z)
+            in_range = self.grasp_z_min <= z <= self.grasp_z_max
+
+            # pan to center if needed
+            if not centered and self.bottle_follow_pan:
+                deg_err = (err_px / self.image_width) * self.camera_hfov_deg
+                if self.invert_pan:
+                    deg_err = -deg_err
+                j1 = self._get_current_j1(fallback=self.home_angles[0])
+                target = clamp(j1 + clamp(deg_err, -self.aim_step_deg, self.aim_step_deg), 0.0, 180.0)
+                self._publish_single_joint(1, target, runtime_ms=800, settle_s=0.10)
+                continue
+
+            # grip!
+            if centered and in_range:
+                self._publish_single_joint(6, 180.0, runtime_ms=750, settle_s=0.20)
+                return True, f"Gripped bottle at {z:.2f} m"
+
+            time.sleep(0.05)
+
+        return False, "Timed out waiting for a good bottle pose"
+
+    # ==================== Action entrypoint ====================
+    def execute_callback(self, goal_handle):
+        skill_in = goal_handle.request.skill_name.strip()
+        self.get_logger().info(f"Executing skill: '{skill_in}'...")
+        name, arg = (skill_in.split(':', 1) + [None])[:2]
+        name = name.strip()
+        arg = arg.strip() if arg else None
+
+        # ---------- basics ----------
+        if name == "go_home":
+            self._publish_joint_array(self.home_angles, self.home_runtime_ms, settle_s=0.05)
+            time.sleep(self.home_runtime_ms / 1000.0)
+            goal_handle.succeed()
+            return SkillExecution.Result(success=True, message="Go Home done.")
+
+        if name == "pose_observe":
+            self._publish_joint_array(self.observe_angles, self.observe_runtime_ms, settle_s=0.05)
+            time.sleep(self.observe_runtime_ms / 1000.0)
+            goal_handle.succeed()
+            return SkillExecution.Result(success=True, message="Observe pose.")
+
+        if name == "open_gripper":
+            self._publish_single_joint(6, 45.0, runtime_ms=800, settle_s=0.2)
+            goal_handle.succeed()
+            return SkillExecution.Result(success=True, message="Gripper opened.")
+
+        if name == "close_gripper":
+            self._publish_single_joint(6, 180.0, runtime_ms=800, settle_s=0.2)
+            goal_handle.succeed()
+            return SkillExecution.Result(success=True, message="Gripper closed.")
+
+        # ---------- simple vision helpers ----------
+        if name == "scan_scene":
+            if not self._wait_for_dets(timeout_sec=2.0, freshness_sec=1.0):
+                goal_handle.succeed()
+                return SkillExecution.Result(success=True, message="No detections (is vision running?)")
+            det, nm, sc = self._best_det()
+            if det is None:
+                goal_handle.succeed()
+                return SkillExecution.Result(success=True, message="No detections")
+            msg = f"{nm} ({sc:.2f}) @ [{det.position.x:.2f}, {det.position.y:.2f}, {det.position.z:.2f}]"
+            goal_handle.succeed()
+            return SkillExecution.Result(success=True, message=msg)
+
+        if name == "scan_pan":
+            best = None
+            seq = list(self._frange(self.scan_pan_min, self.scan_pan_max, self.scan_pan_step))
+            seq += list(self._frange(self.scan_pan_max, self.scan_pan_min, -self.scan_pan_step))
+            for a in seq:
+                a = clamp(a, 0.0, 180.0)
+                self._publish_single_joint(1, a, self.scan_pan_runtime_ms, settle_s=self.scan_pan_settle_s)
+                self._wait_for_dets(timeout_sec=0.8, freshness_sec=0.8)
+                det, nm, sc = self._best_det()
+                if det is not None:
+                    pt = [det.position.x, det.position.y, det.position.z]
+                    if (best is None) or (sc > best[1]):
+                        best = (nm, sc, pt)
+            if best is None:
+                goal_handle.succeed()
+                return SkillExecution.Result(success=True, message="Pan scan: none")
+            nm, sc, pt = best
+            goal_handle.succeed()
+            return SkillExecution.Result(success=True, message=f"Pan scan: best={nm} ({sc:.2f}) @ [{pt[0]:.2f},{pt[1]:.2f},{pt[2]:.2f}]")
+
+        if name == "aim_best":
+            ok, msg = self._aim_on_detection(target_name=None)
+            if ok:
+                goal_handle.succeed()
+                return SkillExecution.Result(success=True, message=msg)
+            goal_handle.abort()
+            return SkillExecution.Result(success=False, message=msg)
+
+        if name == "aim_class":
+            if not arg:
+                goal_handle.abort()
+                return SkillExecution.Result(success=False, message="Usage: aim_class:<name>")
+            ok, msg = self._aim_on_detection(target_name=arg)
+            if ok:
+                goal_handle.succeed()
+                return SkillExecution.Result(success=True, message=msg)
+            goal_handle.abort()
+            return SkillExecution.Result(success=False, message=msg)
+
+        if name == "aim_and_grasp_best":
+            if not self._wait_for_dets(timeout_sec=2.0, freshness_sec=1.0):
+                goal_handle.abort()
+                return SkillExecution.Result(success=False, message="No detections to grasp")
+            ok, msg = self._aim_on_detection(target_name=None)
+            if not ok:
+                goal_handle.abort()
+                return SkillExecution.Result(success=False, message=f"Aim failed: {msg}")
+            self._publish_single_joint(6, 45.0, runtime_ms=600, settle_s=0.15)
+            j_now = self._snapshot_joints(fallback=self.home_angles)
+            target = j_now[:]
+            target[1] = self.pregrasp_j2
+            target[2] = self.pregrasp_j3
+            self._publish_joint_array(target, self.pregrasp_runtime_ms, settle_s=0.05)
+            time.sleep(self.pregrasp_runtime_ms / 1000.0)
+            self._publish_single_joint(6, 180.0, runtime_ms=800, settle_s=0.2)
+            if self.post_raise_to_home:
+                raise_up = self.home_angles[:]
+                raise_up[0] = self._get_current_j1(fallback=self.home_angles[0])
+                raise_up[5] = 180.0
+                self._publish_joint_array(raise_up, 2500, settle_s=0.05)
+                time.sleep(2.5)
+            goal_handle.succeed()
+            return SkillExecution.Result(success=True, message="Aimed and grasped.")
+
+        # ---------- high-level ----------
+        if name == "pick_bottle":
+            ok, msg = self._aim_on_detection(target_name='bottle')
+            if not ok:
+                goal_handle.abort()
+                return SkillExecution.Result(success=False, message=f"Aim failed: {msg}")
+            self._publish_single_joint(6, 45.0, runtime_ms=600, settle_s=0.15)
+            j_now = self._snapshot_joints(fallback=self.home_angles)
+            target = j_now[:]
+            target[1] = self.pregrasp_j2
+            target[2] = self.pregrasp_j3
+            self._publish_joint_array(target, self.pregrasp_runtime_ms, settle_s=0.05)
+            time.sleep(self.pregrasp_runtime_ms / 1000.0)
+            self._publish_single_joint(6, 180.0, runtime_ms=800, settle_s=0.2)
+            goal_handle.succeed()
+            return SkillExecution.Result(success=True, message="Bottle picked.")
+
+        if name == "give_to_hand":
+            ok, msg = self._give_to_hand(timeout_s=20.0)
+            if ok:
+                goal_handle.succeed()
+                return SkillExecution.Result(success=True, message=msg)
+            goal_handle.abort()
+            return SkillExecution.Result(success=False, message=msg)
+
+        if name == "pick_and_give":
+            ok, msg = self._aim_on_detection(target_name='bottle')
+            if not ok:
+                goal_handle.abort()
+                return SkillExecution.Result(success=False, message=f"Aim failed: {msg}")
+            self._publish_single_joint(6, 45.0, runtime_ms=600, settle_s=0.15)
+            j_now = self._snapshot_joints(fallback=self.home_angles)
+            target = j_now[:]
+            target[1] = self.pregrasp_j2
+            target[2] = self.pregrasp_j3
+            self._publish_joint_array(target, self.pregrasp_runtime_ms, settle_s=0.05)
+            time.sleep(self.pregrasp_runtime_ms / 1000.0)
+            self._publish_single_joint(6, 180.0, runtime_ms=800, settle_s=0.2)
+            ok2, msg2 = self._give_to_hand(timeout_s=20.0)
+            if ok2:
+                goal_handle.succeed()
+                return SkillExecution.Result(success=True, message=msg2)
+            goal_handle.abort()
+            return SkillExecution.Result(success=False, message=f"Picked but handover failed: {msg2}")
+
+        if name == "place_table":
+            self._publish_joint_array(self.table_drop_angles, self.table_drop_runtime_ms, settle_s=0.05)
+            time.sleep(self.table_drop_runtime_ms / 1000.0)
+            self._publish_single_joint(6, 45.0, runtime_ms=600, settle_s=0.2)
+            goal_handle.succeed()
+            return SkillExecution.Result(success=True, message="Placed on table.")
+
+        # ---------- NEW: hold_bottle ----------
+        if name == "hold_bottle":
+            ok, msg = self._hold_bottle_loop(timeout_s=20.0)
+            if ok:
+                goal_handle.succeed()
+                return SkillExecution.Result(success=True, message=msg)
+            goal_handle.abort()
+            return SkillExecution.Result(success=False, message=msg)
+
+        # ---------- fallback ----------
+        goal_handle.abort()
+        return SkillExecution.Result(success=False, message=f"Skill '{skill_in}' is not recognized.")
+
+    # ---------- utilities ----------
+    def _frange(self, start, stop, step):
+        x = start
+        if step == 0:
+            yield start; return
+        if step > 0:
+            while x <= stop:
+                yield x; x += step
+        else:
+            while x >= stop:
+                yield x; x += step
+
+    def _snapshot_joints(self, fallback):
+        out = []
+        for i in range(6):
+            out.append(float(self.current_joints[i]) if self.current_joints[i] is not None else float(fallback[i]))
+        return out
+
+    # ---------- bottle give helper ----------
+    def _give_to_hand(self, timeout_s=20.0):
+        t0 = time.time()
+        while time.time() - t0 < timeout_s:
+            det, nm, sc = self._best_det(class_name='person')
+            if det is None:
+                time.sleep(0.05)
+                continue
+
+            u = float(det.bbox.center.position.x)
+            center_u = self.image_width / 2.0 + self.follow_center_bias_px
+            err_px = u - center_u
+            if abs(err_px) > self.follow_tol_px:
+                deg_err = (err_px / self.image_width) * self.camera_hfov_deg
+                if self.invert_pan:
+                    deg_err = -deg_err
+                j1 = self._get_current_j1(fallback=self.home_angles[0])
+                step = clamp(deg_err, -self.follow_step_deg, self.follow_step_deg)
+                target = clamp(j1 + step, 0.0, 180.0)
+                self._publish_single_joint(1, target, runtime_ms=self.follow_runtime_ms, settle_s=0.08)
+
+            z = float(det.position.z)
+            if self.hand_range_min_m <= z <= self.hand_range_max_m and abs(err_px) <= self.follow_tol_px:
+                self._publish_single_joint(6, 45.0, runtime_ms=600, settle_s=0.2)
+                return True, f"Gave to hand at {z:.2f} m"
+        return False, "Timed out waiting for hand distance"
+
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = SkillServer()
+    rclpy.spin(node)
+    node.destroy_node()
+    rclpy.shutdown()
+
+
+if __name__ == '__main__':
+    main()

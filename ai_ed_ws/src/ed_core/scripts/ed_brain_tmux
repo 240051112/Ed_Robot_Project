@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SESSION="${SESSION:-ed_brain}"
+WS="${WS:-$HOME/ai_ed_ws}"
+RUN="$WS/src/ed_core/scripts/run_ed_brain"
+
+if ! command -v tmux >/dev/null 2>&1; then
+  echo "tmux not found. Run directly instead:"
+  echo "  $RUN"
+  exec "$RUN"
+fi
+
+tmux kill-session -t "$SESSION" >/dev/null 2>&1 || true
+tmux new -d -s "$SESSION" "$RUN"
+echo "tmux session '$SESSION' started. Attach with:  tmux attach -t $SESSION"

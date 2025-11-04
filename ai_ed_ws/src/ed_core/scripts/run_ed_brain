@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# 1) Load your ED env (provides setup_ed + paths)
+if ! declare -F setup_ed >/dev/null 2>&1; then
+  # Try the lightweight env file first
+  [ -f "$HOME/.ed_env.sh" ] && . "$HOME/.ed_env.sh"
+  # Fallback to .bashrc if needed
+  if ! declare -F setup_ed >/dev/null 2>&1; then
+    [ -f "$HOME/.bashrc" ] && . "$HOME/.bashrc"
+  fi
+fi
+
+setup_ed
+
+# 2) Model / server paths
+export ED_MODEL_PATH="${ED_MODEL_PATH:-$HOME/phi3_models/Phi-3-mini-4k-instruct.Q4_K_M.gguf}"
+export ED_LLM_HOST="${ED_LLM_HOST:-127.0.0.1}"
+export ED_LLM_PORT="${ED_LLM_PORT:-8080}"
+export ED_LLAMA_SERVER_BIN="${ED_LLAMA_SERVER_BIN:-$HOME/llama.cpp/build/bin/llama-server}"
+
+# Performance knobs
+export ED_LLM_NGL="${ED_LLM_NGL:-999}"
+export ED_LLM_CTX="${ED_LLM_CTX:-4096}"
+export ED_LLM_BATCH="${ED_LLM_BATCH:-256}"
+export ED_LLM_TEMP="${ED_LLM_TEMP:-0.4}"
+
+# Helpers
+port_in_use() {
+  ss -ltn "( sport = :$1 )" | grep -q ":$1 "
+}
+
+# 3) Start llama.cpp server IF NOT already running. (Do NOT start the ED API here.)
+if ! port_in_use "$ED_LLM_PORT"; then
+  echo "[run_ed_brain] starting llama-server on :$ED_LLM_PORT ..."
+  "$ED_LLAMA_SERVER_BIN" \
+    -m "$ED_MODEL_PATH" \
+    -ngl "$ED_LLM_NGL" \
+    -c "$ED_LLM_CTX" \
+    -b "$ED_LLM_BATCH" \
+    --host "$ED_LLM_HOST" \
+    --port "$ED_LLM_PORT" \
+    >/tmp/llama_server.log 2>&1 &
+
+  LLM_PID=$!
+  echo "[run_ed_brain] llama-server pid=$LLM_PID  (logs: /tmp/llama_server.log)"
+else
+  echo "[run_ed_brain] llama-server already listening on :$ED_LLM_PORT; not starting another."
+fi
+
+# 4) DO NOT start uvicorn here. The ROS node owns the API on :8000.
+#    Just run the ROS node in the foreground, like before.
+echo "[run_ed_brain] starting ROS2 node: ed_core ed_brain"
+trap 'echo "[run_ed_brain] shutting down"; pkill -f "[l]lama-server" || true' EXIT
+exec ros2 run ed_core ed_brain
+# Launch the ROS2 node
+echo "[run_ed_brain] starting ROS2 node: ed_core ed_brain"
+exec ros2 run ed_core ed_brain
